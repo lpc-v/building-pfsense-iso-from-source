@@ -1,22 +1,16 @@
-# How to: building a pfSense .iso from sources
-
-Here are the steps for building a pfSense ISO file. I tried to follow [the guide of PiBa-NL](https://github.com/PiBa-NL/PiBa-NL-WIKI/wiki/How-to-building-a-pfSense-.iso-from-sources) firstly, but there was missing things so I made my own guide. This guide has been written for 2.5.0, but may works for other versions
-
-*Like for PiBa-NL guide, small disclaimer: Stuff might be missing, and stuff will change over time, and might not be updated.*
-
-# First things first: choose a name for your product, and update repositories accordingly
-
-Netgate doesn't allow you to build a product using the name "pfSense" (because of trademark). 
-Before building a .iso file, you will have to choose a custom name for your firewall.
-I'll use libreSense for this tutorial, but you could use whatever you want.
 
 
-You will then have to fork 3 repositories: 
+### fork三个仓库，并对三个仓库做修改
+
+注意：需要选取一个名称作为编译的iso名称，不能选用**pfSense**，这里选择**libreSense**
+
+
+fork下面三个仓库: 
 - [pfSense GUI](https://github.com/pfsense/pfsense)
 - [FreeBSD Ports](https://github.com/pfsense/freebsd-ports) (Ports collection is the FreeBSD package management system, it works like `apt` or `rpm` on Linux)
 - [FreeBSD Kernel Source](https://github.com/pfsense/freebsd-src)
 
-You will also need to apply the follwing changes :
+fork 完成后对三个仓库做如下修改
 
 ### FreeBSD Source
 - Checkout to the the branch you would like to build (`devel-12` for dev version, `RELENG_2_5_0` for stable version).
@@ -34,39 +28,18 @@ You will also need to apply the follwing changes :
 - In the folder `/src/etc/`, rename the files `pfSense-ddb.conf` and `pfSense-devd.conf` to `libreSense-ddb.conf` and `libreSense-devd.conf`.
 - Edit the file `/tools/builder_defaults.sh` : remove `if_wg` from the `MODULES_OVERRIDE` variable. 
 
-## A deeper look into Netgate build environment
+## 配置编译环境
 
-Finally, it is important to understand how we are going to build our ISO and what will be the build environment of this tutorial.
+编译使用的freeBSD至少需要10G内存，8核以上cpu。cpu核心数越多编译越快。另外需要**能够访问国外资源**。
 
-Netgate seems to be using a quite heavy and complex build environment, designed to match the goals and the strategy/direction of the company.
+**本文使用freeBSD12.2  16G内存   48核CPU  60G磁盘（如果是固态硬盘更好，编译过程中有大量的磁盘IO) 编译分支为RELENGV2_5_0**
 
-![netgate environment for build](
-https://github.com/Augustin-FL/building-pfsense-iso-from-source/blob/master/images/netgate_env.png?raw=true)
-
-Because this tutorial doesn't aim to set up an industrialized build farm:
-- The build server will also act as web server for delivering ports (The build system is actively using ports repository when making an ISO).
-- Signing scripts for the ports repository will be located on the build server
-- Files won't be sent to an external NFS server after being built
-
-
-With that said, let's setup our build server.
-
-# Setup a proper build environment
-
-- You will need to download and install a FreeBSD server that matches the version you want to build. pfSense 2.5.0 [require FreeBSD 12.2](https://docs.netgate.com/pfsense/en/latest/releases/versions-of-pfsense-and-freebsd.html), in AMD64.
-
-This server can be either a VM or a physical machine. High amount of HDD isn't needed (at least 30 Gb is recommended) but high number of CPU core is advised (otherwise build time may be very long) and high memory amount is required (>10Gb recommended. 10 Gb should be fine....8 Gb is not enough and may cause your build to crash). [You can download a FreeBSD ISO here](https://download.freebsd.org/ftp/releases/amd64/amd64/ISO-IMAGES/).
-
-This FreeBSD machine will also have to be connected to the internet and will have to be reachable by your workstations in SSH and HTTP.
-
-During installation, **please partition your disk in ZFS**. 
+在安装freeBSD时，需要选择ZFS文件格式，其它步骤正常安装即可。
 
 ![Disk partition](
 https://github.com/Augustin-FL/building-pfsense-iso-from-source/blob/master/images/ZFS.png?raw=true)
 
-## Make some configurations on the build server
-
-Once the server has been installed some updates and configs need to be made. Login as root and execute following commands:
+安装完成后依次输入以下命令配置环境。（若下载速度慢，则为网络不能翻墙）
 
 ```
 # Allow SSH using root, if you want it.
@@ -88,10 +61,10 @@ portsnap fetch extract
 # not required but advised for building/monitoring/debugging
 pkg install -y htop screen wget mmv
 
-# Only install this if your FreeBSD is a virtual machine
+# （只有是虚拟机才需要安装）
 pkg install -y open-vm-tools
 
-# Create an 8G swap device (Not required but advised : will be useful if you don't have enough memory)
+# （内存如果够大，不需要这一步）
 dd if=/dev/zero of=/root/swap.bin bs=1M count=8192
 chmod 0600 /root/swap.bin
 mdconfig -a -t vnode -f /root/swap.bin -u 0 
@@ -101,7 +74,7 @@ swapon /dev/md0
 
 
 
-Then you need to configure nginx for PKG hosting and poudriere monitoring:
+接下来配置Nginx:
 ```
 # pfSense_gui_branch represents the branch of pfSense GUI that will be compiled, with "RELENG" replaced by "v" : master for a development ISO, v2_5_0 for a stable ISO
 # pfSense_port_branch represents the branch of FreeBSD ports that will be compiled, using the same replacement ("RELENG"=>"v") : devel for a development ISO, v2_5_0 for a stable ISO
@@ -128,9 +101,8 @@ echo nginx_enable=\"YES\" >> /etc/rc.conf
 service nginx restart
 ```
 
-## Setup a signing key
+## 生成签名密钥
 
-As mentioned above, we will setup a signing key in the build server. Execute these commands to generate the signing key:
 ```
 mkdir -p /root/sign/
 cd /root/sign/
@@ -140,7 +112,7 @@ openssl rsa -in repo.key -out repo.pub -pubout
 printf "function: sha256\nfingerprint: `sha256 -q repo.pub`\n" > fingerprint
 ```
 
-Then create a script file `sign.sh` in the `/root/sign/` folder.
+在 `/root/sign/` 创建`sign.sh`包含以下内容
 ```
 #!/bin/sh
 read -t 2 sum
@@ -152,15 +124,13 @@ echo CERT
 cat /root/sign/repo.pub
 echo END
 ```
-Finally, ensure that this script is executable: 
+最后，给sign.sh执行权限
 ```
 chmod +x /root/sign/sign.sh
 ```
 
-## Configure how pfSense will be built
 
-
-Now that your server is configured, we will configure how pfSense will be compiled. Clone your fork of pfSense GUI, checkout to the branch that will be built, and configure your fork to use your signing key
+接下来配置如何编译pfsense
 ```
 cd /root
 git clone https://github.com/{your username}/pfsense.git
@@ -173,7 +143,7 @@ cp /root/sign/fingerprint src/usr/local/share/${product_name}/keys/pkg/trusted/f
 ```
 
 
-Let's then create a file called ```build.conf``` in the folder of pfSense GUI.
+在`/root/pfsense`目录（也就是刚才克隆的仓库）下创建build.conf文件，包含以下内容。注意：不要在Windows上创建`build.conf`然后上传到服务器，尽量在服务器上直接使用`touch`和`vim`来操作，否则可能会编译报错。
 ```
 export PRODUCT_NAME="libreSense" # Replace with your product name
 export FREEBSD_REPO_BASE=https://github.com/{your username}/FreeBSD-src.git # Location of your FreeBSD sources repository
@@ -206,78 +176,74 @@ export PKG_REPO_SERVER_RELEASE="pkg+http://${myIPAddress}/packages"
 
 export PKG_REPO_SERVER_STAGING="pkg+http://${myIPAddress}/packages" # We need to also specify this variable, because even
 # if we don't build staging release some ports configuration is made for staging.
-``` 
+```
 
-# Building the ISO
+# 开始编译
 
-Now that we have a working environment, let's start the heavy work.
-
-First, start a screen on your build server, using command ```screen -S build```. You may leave this screen using ctrl+A then D, and you may enter this screen again using command ```screen -r build```. The purpose of the screen is to keep your work running if you disconnect from the build server.
+使用 ```screen -S build``` 打开一个窗口 使用 ctrl+A then D可以离开窗口，使用 ```screen -r build``` 可以重新进入窗口。这样免得ssh断开连接就停止编译了。
 
 ### Setup Jails
-Execute the command ```./build.sh --setup-poudriere```. This will setup the environment and create the FreeBSD jail necessary for your build. You can then leave the screen and `tail -f logs/poudriere.log` to check what's going on. Expect the command to run for ~1 hour.
-
-If something goes wrong: 
-- You may add `set -x` at the beginning of `build.sh` to debug what's happening in there.
-- You can list created jails with command ```poudriere jail -l```, and you can remove created jails using `poudriere jail -d -j {jailName} -C clean`.
-- You may also verify if you didn't enter a wrong URL for FreeBSD ports the `build.conf`. This would result in the command being stuck (A message `please enter username from "https://github.com":` will be displayed in the logs in such case)
+执行 ```./build.sh --setup-poudriere```. 
 
 
 ### Build ports
-Then execute ```./build.sh --update-pkg-repo``` to compile the ~500 FreeBSD ports of pfSense.
-You may want to monitor the build environment on your server using HTTP ( http://ipOfYourServer/poudriere ). Expect between 4 to 6 hours to run.
+执行 ```./build.sh --update-pkg-repo``` 
+在浏览器 ( http://ipOfYourServer/poudriere )可以查看编译进度（如果查看不了，前面配置nginx有问题）
 
-![Disk partition](
-https://github.com/Augustin-FL/building-pfsense-iso-from-source/blob/master/images/poudriere_build.png?raw=true)
+有些port编译会失败，原因可能是该port的版本低不再受支持。
 
-In case something goes wrong: Logs files can be seen using HTTP or directly on the build server, in the folder ```/usr/local/poudriere/data/logs/bulk/```. You need to analyze the logs of each failed port to understand exactly what's the problem for each of them.
+本文在编译时，把失败的port都给删除了，这样就不会再出现编译失败了。。。 [poudriere_bulk](https://github.com/pfsense/pfsense/blob/master/tools/conf/pfPorts/poudriere_bulk) （在这里删除，这里面没有所有的Port，因为port有依赖关系，这里只有最上层的port，当需要删除的port不再文件中时，需要查清楚依赖关系，看是哪个上层port依赖该port）
 
-Few possible root causes: 
-- The `FreeBSD-port` branch that you are trying to build does not match the FreeBSD version of your build server.
-- You are trying to build an out-of-date version of pfSense and some `dist` files are not available anymore on the [official FreeBSD distcache](http://distcache.FreeBSD.org/), resulting in errors at the `fetch` step. 
-   - In this case you can update the [`distinfo`](https://github.com/pfsense/FreeBSD-ports/blob/devel/print/texinfo/distinfo) of each concerned port in your GitHub fork of `FreeBSD ports`, then you can run `./build.sh --update-poudriere-ports` to refresh the files on your build server. 
-   - Alternatively, you can find any old dist mirror (such as [this one](http://distfiles.icmpv6.org/distfiles/)), download the files on the build server in their matching folder (using `wget`/`curl`), then continue the build
+在该阶段最后需要签名，可能出现失败情况。signing repo failed...
 
-You need to build **ALL** ports before proceeding to the next step. If you don't want to build one port, you can exclude it by removing it in [poudriere_bulk](https://github.com/pfsense/pfsense/blob/master/tools/conf/pfPorts/poudriere_bulk).
+解决方法：
 
+1. 在开始编译之前查看pkg版本使用`pkg --v`如果为1.17则需要降级到1.16。
+
+   ```shell
+   pkg install portdowngrade
+   cd /root
+   portdowngrade ports-mgmt/pkg rc565958
+   然后根据输出结果完成pkg安装
+   ```
+
+2. 在build.sh中配置跳过签名阶段
+
+   在`build.sh`第约150左右添加一行代码
+
+   ```
+   --update-pkg-repo)
+   export DO_NOT_SIGN_PKG_REPO=YES //添加这一行
+   BUILDACTION="update_pkg_repo"
+   ;;
+   ```
+
+   
 
 ### Build kernel and create ISO
 
- Finally, you can build your customized firewall: `./build.sh --skip-final-rsync iso`. This command will build the kernel, then install ports on top of it and create the ISO file. Expect the command to run for ~one hour.
- 
-The build can the monitored from the two files in the `logs/` directory of pfSense GUI: 
-- `buildworld.amd64`, `installworld.amd64` and `kernel.libreSense.amd64.log` will contain logs relative to the build of FreeBSD kernel.
-- `install_pkg_install_ports.txt` contain logs relative to the installation of the ports. They are retrieved from the URL specified in the `build.conf` file.
-- `isoimage.amd64` and `cloning.amd64.log` contain logs relative to the build of the ISO itself
+ 最后执行 `./build.sh --skip-final-rsync iso`
 
 At the end of the build, a compressed iso file (`.iso.gz`) will be present in `~pfsense/tmp/${product_name}/installer/`. You can extract it using `gzip -kd *.gz` if you need the plain `.iso`.
 
-### If your encounter errors during ports or kernel build: possible root causes, and how to fix them:
+在该阶段可能出现问题即解决办法：
 
-One very possible root cause to why your build is failing, is related to how `Makefile` system works correlated with an unlucky timing. What happens is usually close to the following: 
+1. 在中间有一个make阶段报错。若编译环境选择48核。执行make -j96会报错。
 
-1. Netgate build port XXX from `FreeBSD-ports`. On internal Netgate servers, poudriere marks the port as built and won't attempt to re-build it unless an update is made on the code ("config bump")
-3. Few month later, ports owners update their build requirement (`distfile` update) / Netgate update its build environment (e.g., `openssl => opensll111` )
-2. Netgate does NOT keep `FreeBSD-ports` in sync with the official FreeBSD ports repository. At this point, any attempt of rebuilding ports will fail...But it is fine for Netgate : the built packages are already there, and no rebuild will be made as long as no config bump is done on the ports. 
-4. When you try to build ports yourself, some ports fail during build and you don't understand why.
+   解决办法：减少cpu核心数到24核即可解决。
 
-The same applies for the content of `FreeBSD-src`. The recommended way to fix this issue is to simply re-synchronize modules that are failing with upstream, so that you will have an up-to-date ISO.
+2. installing ports阶段报错。
 
-Also, Netgate has been accused of [performing *delayed open-sourcing*](https://github.com/doktornotor/pfsense-still-closedsource/blob/master/img/screenshot_bug8155_rebuilding_pfsense_kernel.png) in the past on `Freebsd-src`. It is unclear if it was due to users misunderstanding on how the build system works, due to Netgate shady practices, or due to a temporary maintenance. 
-I haven't noticed any *delayed open sourcing* myself, but If that ever happens, you can merge FreeBSD sources with your branch directly.
+   报错原因为在安装ports时url出错。
 
+   解决办法：
 
-# Differences between a genuine pfSense and your ISO
+   ```
+   # cd /usr/local/www/nginx-dist/packages
+   # ln -s /usr/local/poudriere/data/packages/libreSense_v2_5_0_amd64-libreSense_v2_5_0 libreSense_v2_5_1_amd64-libreSense_v2_5_1
+   (注意：第二条命令较长，中间有空格)
+   ```
 
-Your ISO is built the same way as pfSense ISO distributed by Netgate, and does contain the same code, with one major difference: your ISO does not include GNID.
+   
 
-GNID is a binary (located at `/usr/sbin/gnid`) which is managing Netgate license for pfSense. This binary basically generates a unique Netgate ID for each genuine pfSense. 
-
-The generated unique ID then become part of the default "User-Agent" when making HTTP requests with PHP (HTTP requests are used for fetching bogons, installing packages, displaying the first copyright message...etc). 
-
-It is also required for accessing Netgate services on pfSense (such as ACB, or professional support)
-
-How does this binary works is known *(a quick look to this binary with `radare2` show that it basically tries to fetch the platform it is running on, and if the platform is not Netgate hardware then it computes an ID using sha256 and MAC addresses of the device)*, but this program is property of Netgate and is closed-source (it is stored in the internal GitLab of Netgate). 
-
-Because your ISO does not contain GNID, you may not be able to retrieve bogons feed from Netgate, to use ACB, to install packages from official repositories or to ask for professional support to Netgate.
-You also won't recieve latest pfSense updates (which makes sense, since your ISO can't be called *pfSense software*..)
+   
